@@ -16,7 +16,7 @@ const migrationStore = `
 `
 
 const add = `
-	INSERT INTO "migrations" (name, down)
+	INSERT INTO "migrations" (name, rollback)
 	VALUES ($1, $2);
 `
 
