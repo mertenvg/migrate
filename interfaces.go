@@ -1,6 +1,9 @@
 package migrate
 
-import "io"
+import (
+	"context"
+	"io"
+)
 
 // Adapter applies the necessary migrations to the database
 type Adapter interface {
@@ -9,13 +12,15 @@ type Adapter interface {
 	// List the applied migrations
 	List() ([]string, error)
 	// Begin a transaction
-	Begin() error
-	// Apply the migration
-	Apply(name string, up, down io.Reader) error
-	// Rollback a migration that was previously applied (if it has a rollback)
-	Rollback(name string) error
-	// Commit the transaction and store the migration name in the migration store along with an optional down/rollback migration
+	Begin(ctx context.Context) error
+	// Up a migration
+	Up(name string, up, down io.Reader) error
+	// Down a migration that was previously applied, if it has a down/rollback saved when it was applied
+	Down(name string) error
+	// Commit the transaction
 	Commit() error
+	// Rollback the transaction
+	Rollback() error
 }
 
 // Provider tells us what needs to be done
@@ -32,4 +37,6 @@ type Migration interface {
 	Up() io.Reader
 	// Down returns what will need to be rolled back as an io.Reader
 	Down() io.Reader
+	// Close any open readers or files
+	Close()
 }
