@@ -4,3 +4,7 @@ start-postgres:
 
 test:
 	go test -v ./...
+
+test-with-coverage:
+	go test -v ./... -coverprofile=test-with-coverage.out
+	go tool cover -html=test-with-coverage.out

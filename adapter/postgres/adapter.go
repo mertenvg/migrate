@@ -52,7 +52,7 @@ type Adapter struct {
 
 func MustClose(c io.Closer, log LogFunc) {
 	err := c.Close()
-	if err != nil {
+	if err != nil && log != nil {
 		log("failed to close:", err)
 	}
 }
@@ -91,6 +91,7 @@ func (a *Adapter) List() ([]string, error) {
 	for rows.Next() {
 		var name string
 		if err := rows.Scan(&name); err != nil {
+			MustClose(rows, a.log)
 			return nil, fmt.Errorf("postgres.Adapter List failed: %w", err)
 		}
 		names = append(names, name)
@@ -100,6 +101,9 @@ func (a *Adapter) List() ([]string, error) {
 }
 
 func (a *Adapter) Begin(ctx context.Context) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	tx, err := a.db.BeginTx(ctx, a.txOptions)
 	if err != nil {
 		return fmt.Errorf("postgres.Adapter Begin failed: %w", err)
@@ -108,36 +112,47 @@ func (a *Adapter) Begin(ctx context.Context) error {
 	return nil
 }
 
-func (a *Adapter) Up(name string, up, down io.Reader) error {
-	a.log("Applying migration", name)
-
-	reader := reader.NewSQLReader(up)
-
+func (a *Adapter) apply(r *reader.SQLReader) error {
 	for {
-		q, err := reader.Next()
+		q, err := r.Next()
 		if err != nil {
-			return fmt.Errorf("postgres.Adapter Apply failed to get query for migration '%s': %w", name, err)
+			return fmt.Errorf("failed to get query: %w", err)
 		}
 		if q == "" {
 			break
 		}
-		if strings.HasPrefix(q, "BEGIN") || strings.HasPrefix(q, "COMMIT") {
+		firstWord := strings.ToUpper(strings.Split(q, " ")[0])
+		if strings.HasPrefix(firstWord, "BEGIN") || strings.HasPrefix(firstWord, "COMMIT") {
 			continue
 		}
 
 		_, err = a.tx.Exec(q)
 		if err != nil {
-			return fmt.Errorf("postgres.Adapter Apply failed to execute query '%s' for migration '%s': %w", q, name, err)
+			return fmt.Errorf("failed to execute query '%s': %w", q, err)
+		}
+	}
+	return nil
+}
+
+func (a *Adapter) Up(name string, up, down io.Reader) error {
+	a.log("Applying migration", name)
+
+	err := a.apply(reader.NewSQLReader(up))
+	if err != nil {
+		return fmt.Errorf("postgres.Adapter Up error for migration '%s': %w", name, err)
+	}
+
+	var downData []byte
+
+	if down != nil {
+		downData, err = io.ReadAll(down)
+		if err != nil {
+			return fmt.Errorf("postgres.Adapter Up failed to read down file for migration '%s': %w", name, err)
 		}
 	}
 
-	downData, err := io.ReadAll(down)
-	if err != nil {
-		return fmt.Errorf("postgres.Adapter Apply failed to read down file for migration '%s': %w", name, err)
-	}
-
-	if _, err = a.tx.Exec(add, name, string(downData)); err != nil {
-		return fmt.Errorf("postgres.Adapter Apply failed to register migration '%s': %w", name, err)
+	if _, err = a.tx.Stmt(a.stmts.Get(add)).Exec(name, string(downData)); err != nil {
+		return fmt.Errorf("postgres.Adapter Up failed to register migration '%s': %w", name, err)
 	}
 
 	return nil
@@ -147,9 +162,9 @@ func (a *Adapter) Down(name string) error {
 	a.log("Taking down migration", name)
 
 	var rollback string
-	err := a.tx.QueryRow(rollbackWithName, name).Scan(&rollback)
+	err := a.tx.Stmt(a.stmts.Get(rollbackWithName)).QueryRow(name).Scan(&rollback)
 	if err != nil {
-		return fmt.Errorf("postgres.Adapter Rollback failed to get rollback sql: %w", err)
+		return fmt.Errorf("postgres.Adapter Down failed to get rollback sql: %w", err)
 	}
 
 	if rollback == "" {
@@ -157,28 +172,13 @@ func (a *Adapter) Down(name string) error {
 		return nil
 	}
 
-	reader := reader.NewSQLReader(bytes.NewBufferString(rollback))
-
-	for {
-		q, err := reader.Next()
-		if err != nil {
-			return fmt.Errorf("postgres.Adapter Rollback failed to get rollback query for migration '%s': %w", name, err)
-		}
-		if q == "" {
-			break
-		}
-		if strings.HasPrefix(q, "BEGIN") || strings.HasPrefix(q, "COMMIT") {
-			continue
-		}
-
-		_, err = a.tx.Exec(q)
-		if err != nil {
-			return fmt.Errorf("postgres.Adapter Rollback failed to execute rollback query '%s' for migration '%s': %w", q, name, err)
-		}
+	err = a.apply(reader.NewSQLReader(bytes.NewBufferString(rollback)))
+	if err != nil {
+		return fmt.Errorf("postgres.Adapter Down error for migration '%s': %w", name, err)
 	}
 
-	if _, err = a.tx.Exec(removeWithName, name); err != nil {
-		return fmt.Errorf("postgres.Adapter Rollback failed to remove migration '%s': %w", name, err)
+	if _, err = a.tx.Stmt(a.stmts.Get(removeWithName)).Exec(name); err != nil {
+		return fmt.Errorf("postgres.Adapter Down failed to remove migration '%s': %w", name, err)
 	}
 
 	return nil

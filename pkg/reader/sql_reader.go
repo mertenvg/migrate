@@ -8,6 +8,10 @@ import (
 	"strings"
 )
 
+// FailNext will return the specified error  when calling Next() on you SQLReader.
+// This is intended for testing purposes unless you specifically want to break your application
+var FailNext error
+
 type SQLReader struct {
 	source *bufio.Reader
 }
@@ -19,6 +23,11 @@ func NewSQLReader(source io.Reader) *SQLReader {
 }
 
 func (r *SQLReader) Next() (query string, err error) {
+	if FailNext != nil {
+		err := FailNext
+		FailNext = nil
+		return "", err
+	}
 	buf := bytes.Buffer{}
 	var quote bool
 	var escape bool

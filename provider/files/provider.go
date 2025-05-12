@@ -59,7 +59,7 @@ func NewProvider(path string) *Provider {
 	return &Provider{}
 }
 
-func (p Provider) Next() (migrate.Migration, error) {
+func (p *Provider) Next() (migrate.Migration, error) {
 	if p.position >= len(p.names) {
 		return nil, nil
 	}
