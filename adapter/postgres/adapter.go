@@ -60,7 +60,7 @@ func MustClose(c io.Closer, log LogFunc) {
 func NewAdapter(db *sql.DB, options ...Option) *Adapter {
 	a := &Adapter{
 		db:  db,
-		log: func(v ...any) { fmt.Println(v...) },
+		log: func(v ...any) {},
 	}
 	for _, option := range options {
 		option(a)

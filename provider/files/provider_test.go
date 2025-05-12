@@ -1,6 +1,7 @@
 package files
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"testing"
@@ -37,6 +38,7 @@ func TestNewProvider(t *testing.T) {
 		if err != nil {
 			t.Errorf("ReadAll(Up()) unexpected error %v", err)
 		}
+		upData = bytes.TrimSpace(upData)
 		if string(upData) != fmt.Sprintf("%s.up", want) {
 			t.Errorf("Up() wanted %s, got %s", fmt.Sprintf("%s.up", want), string(upData))
 		}
@@ -44,6 +46,7 @@ func TestNewProvider(t *testing.T) {
 		if err != nil {
 			t.Errorf("ReadAll(Down()) unexpected error %v", err)
 		}
+		downData = bytes.TrimSpace(downData)
 		if has := hasDown[m.Name()]; has {
 			if string(downData) != fmt.Sprintf("%s.down", want) {
 				t.Errorf("Up() wanted %s, got %s", fmt.Sprintf("%s.down", want), string(downData))

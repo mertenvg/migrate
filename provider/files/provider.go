@@ -28,25 +28,20 @@ func NewProvider(path string) *Provider {
 	migrations := make(map[string]*Migration)
 
 	for _, file := range files {
-		fmt.Println(file.Name())
 		if file.IsDir() {
-			fmt.Println("- skipping dir")
 			continue
 		}
 		fileName := file.Name()
 		if strings.HasSuffix(fileName, ".down.sql") {
 			downFiles = append(downFiles, file)
-			fmt.Println("- skipping .down.sql file")
 			continue
 		}
 		name := fileName
 		if strings.HasSuffix(name, ".sql") {
 			name = strings.TrimSuffix(name, ".sql")
-			fmt.Println("- trim .sql:", name)
 		}
 		if strings.HasSuffix(name, ".up") {
 			name = strings.TrimSuffix(name, ".up")
-			fmt.Println("- trim .up:", name)
 		}
 		names = append(names, name)
 		migrations[name] = &Migration{
