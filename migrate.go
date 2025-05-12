@@ -88,6 +88,7 @@ func (m *Migrate) Migrate(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to apply migration '%v': %w, %w", name, err, m.a.Rollback())
 		}
+		migration.Close()
 	}
 
 	// commit the changes

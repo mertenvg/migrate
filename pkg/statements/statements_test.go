@@ -1,55 +1,85 @@
 package statements
 
 import (
-	"database/sql"
-	"reflect"
+	"errors"
+	"io"
 	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
 )
 
+func MustClose(c io.Closer) {
+	_ = c.Close()
+}
+
 func TestPrepare(t *testing.T) {
-	type args struct {
-		db      *sql.DB
-		queries []string
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
-	tests := []struct {
-		name    string
-		args    args
-		want    Statements
-		wantErr bool
-	}{
-		// TODO: Add test cases.
+	defer MustClose(db)
+
+	mock.ExpectPrepare("one")
+	mock.ExpectPrepare("two")
+	mock.ExpectPrepare("three")
+
+	_, err = Prepare(db, "one", "two", "three")
+
+	wantErr := false
+	if (err != nil) != wantErr {
+		t.Errorf("Prepare() error = %v, wantErr %v", err, wantErr)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := Prepare(tt.args.db, tt.args.queries...)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Prepare() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Prepare() got = %v, want %v", got, tt.want)
-			}
-		})
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %v", err)
+	}
+}
+
+func TestPrepare_WithError(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
+	}
+	defer MustClose(db)
+
+	mock.ExpectPrepare("one").WillReturnError(errors.New("error"))
+
+	_, err = Prepare(db, "one", "two", "three")
+
+	wantErr := true
+	if (err != nil) != wantErr {
+		t.Errorf("Prepare() error = %v, wantErr %v", err, wantErr)
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %v", err)
 	}
 }
 
 func TestStatements_Get(t *testing.T) {
-	type args struct {
-		q string
+	db, mock, err := sqlmock.New()
+	if err != nil {
+		t.Fatalf("an error '%s' was not expected when opening a stub database connection", err)
 	}
-	tests := []struct {
-		name  string
-		stmts Statements
-		args  args
-		want  *sql.Stmt
-	}{
-		// TODO: Add test cases.
+	defer MustClose(db)
+
+	mock.ExpectPrepare("one")
+	mock.ExpectPrepare("two")
+	mock.ExpectPrepare("three")
+
+	stmts, err := Prepare(db, "one", "two", "three")
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.stmts.Get(tt.args.q); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Get() = %v, want %v", got, tt.want)
-			}
-		})
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Errorf("there were unfulfilled expectations: %v", err)
+	}
+
+	if s := stmts.Get("one"); s == nil {
+		t.Errorf("statements.Get(\"one\") should return a non-nil value")
+	}
+	if s := stmts.Get("two"); s == nil {
+		t.Errorf("statements.Get(\"two\") should return a non-nil value")
+	}
+	if s := stmts.Get("three"); s == nil {
+		t.Errorf("statements.Get(\"three\") should return a non-nil value")
 	}
 }

@@ -39,14 +39,22 @@ func (r *SQLReader) Next() (query string, err error) {
 			}
 			return "", fmt.Errorf("failed to read source: %w", err)
 		}
-		if v == '\\' {
-			escape = !escape
+		if !escape && v == '\\' {
+			escape = true
+			continue
 		}
 		if !escape && (v == '\'' || v == '"') {
 			quote = !quote
 		}
 		if !quote && v == ';' {
 			break
+		}
+		if escape {
+			_, err = buf.WriteRune('\\')
+			if err != nil {
+				return "", fmt.Errorf("failed to write rune to buffer: %w", err)
+			}
+			escape = false
 		}
 		_, err = buf.WriteRune(v)
 		if err != nil {
