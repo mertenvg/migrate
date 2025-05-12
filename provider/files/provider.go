@@ -1,10 +1,12 @@
 package files
 
 import (
+	"bytes"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/mertenvg/migrate"
@@ -26,20 +28,25 @@ func NewProvider(path string) *Provider {
 	migrations := make(map[string]*Migration)
 
 	for _, file := range files {
+		fmt.Println(file.Name())
 		if file.IsDir() {
+			fmt.Println("- skipping dir")
 			continue
 		}
 		fileName := file.Name()
 		if strings.HasSuffix(fileName, ".down.sql") {
 			downFiles = append(downFiles, file)
+			fmt.Println("- skipping .down.sql file")
 			continue
 		}
 		name := fileName
 		if strings.HasSuffix(name, ".sql") {
 			name = strings.TrimSuffix(name, ".sql")
+			fmt.Println("- trim .sql:", name)
 		}
 		if strings.HasSuffix(name, ".up") {
 			name = strings.TrimSuffix(name, ".up")
+			fmt.Println("- trim .up:", name)
 		}
 		names = append(names, name)
 		migrations[name] = &Migration{
@@ -47,16 +54,20 @@ func NewProvider(path string) *Provider {
 			upPath: filepath.Join(path, fileName),
 		}
 	}
+	slices.Sort(names)
 	for _, file := range downFiles {
 		fileName := file.Name()
 		name := strings.TrimSuffix(fileName, ".down.sql")
-		if migration, ok := migrations[name]; ok {
-			migration.downPath = filepath.Join(path, fileName)
-		} else {
+		migration, ok := migrations[name]
+		if !ok {
 			panic(fmt.Errorf("no matching 'up' migration found for '%v'", fileName))
 		}
+		migration.downPath = filepath.Join(path, fileName)
 	}
-	return &Provider{}
+	return &Provider{
+		names:      names,
+		migrations: migrations,
+	}
 }
 
 func (p *Provider) Next() (migrate.Migration, error) {
@@ -84,6 +95,9 @@ func (m *Migration) Name() string {
 }
 
 func (m *Migration) Up() io.Reader {
+	if m.upPath == "" {
+		return bytes.NewBufferString("")
+	}
 	file, err := os.Open(m.upPath)
 	if err != nil {
 		panic(fmt.Errorf("cannot open migration file '%v': %w", m.upPath, err))
@@ -93,6 +107,9 @@ func (m *Migration) Up() io.Reader {
 }
 
 func (m *Migration) Down() io.Reader {
+	if m.downPath == "" {
+		return bytes.NewBufferString("")
+	}
 	file, err := os.Open(m.downPath)
 	if err != nil {
 		panic(fmt.Errorf("cannot open migration file '%v': %w", m.downPath, err))

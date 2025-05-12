@@ -1,175 +1,54 @@
 package files
 
 import (
+	"fmt"
 	"io"
-	"reflect"
 	"testing"
-
-	"github.com/mertenvg/migrate"
 )
 
-func TestMigration_Close(t *testing.T) {
-	type fields struct {
-		name     string
-		upPath   string
-		downPath string
-		close    []io.Closer
-	}
-	tests := []struct {
-		name   string
-		fields fields
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := &Migration{
-				name:     tt.fields.name,
-				upPath:   tt.fields.upPath,
-				downPath: tt.fields.downPath,
-				close:    tt.fields.close,
-			}
-			m.Close()
-		})
-	}
-}
-
-func TestMigration_Down(t *testing.T) {
-	type fields struct {
-		name     string
-		upPath   string
-		downPath string
-		close    []io.Closer
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   io.Reader
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := &Migration{
-				name:     tt.fields.name,
-				upPath:   tt.fields.upPath,
-				downPath: tt.fields.downPath,
-				close:    tt.fields.close,
-			}
-			if got := m.Down(); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Down() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestMigration_Name(t *testing.T) {
-	type fields struct {
-		name     string
-		upPath   string
-		downPath string
-		close    []io.Closer
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   string
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := &Migration{
-				name:     tt.fields.name,
-				upPath:   tt.fields.upPath,
-				downPath: tt.fields.downPath,
-				close:    tt.fields.close,
-			}
-			if got := m.Name(); got != tt.want {
-				t.Errorf("Name() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestMigration_Up(t *testing.T) {
-	type fields struct {
-		name     string
-		upPath   string
-		downPath string
-		close    []io.Closer
-	}
-	tests := []struct {
-		name   string
-		fields fields
-		want   io.Reader
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			m := &Migration{
-				name:     tt.fields.name,
-				upPath:   tt.fields.upPath,
-				downPath: tt.fields.downPath,
-				close:    tt.fields.close,
-			}
-			if got := m.Up(); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Up() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestNewProvider(t *testing.T) {
-	type args struct {
-		path string
+	p := NewProvider("./testdata")
+	fmt.Println(p.names)
+	wanted := []string{
+		"00001",
+		"00002",
+		"00003",
+		"00004",
+		"00005.some-description",
 	}
-	tests := []struct {
-		name string
-		args args
-		want *Provider
-	}{
-		// TODO: Add test cases.
+	hasDown := map[string]bool{
+		"00001":                  true,
+		"00004":                  true,
+		"00005.some-description": true,
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := NewProvider(tt.args.path); !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("NewProvider() = %v, want %v", got, tt.want)
+	for _, want := range wanted {
+		m, err := p.Next()
+		if err != nil {
+			t.Errorf("Next() unexpected error %v", err)
+		}
+		if m == nil {
+			t.Errorf("Next() expected non nil value")
+			continue
+		}
+		if m.Name() != want {
+			t.Errorf("Next() Name() wanted %s, got %s", want, m.Name())
+		}
+		upData, err := io.ReadAll(m.Up())
+		if err != nil {
+			t.Errorf("ReadAll(Up()) unexpected error %v", err)
+		}
+		if string(upData) != fmt.Sprintf("%s.up", want) {
+			t.Errorf("Up() wanted %s, got %s", fmt.Sprintf("%s.up", want), string(upData))
+		}
+		downData, err := io.ReadAll(m.Down())
+		if err != nil {
+			t.Errorf("ReadAll(Down()) unexpected error %v", err)
+		}
+		if has := hasDown[m.Name()]; has {
+			if string(downData) != fmt.Sprintf("%s.down", want) {
+				t.Errorf("Up() wanted %s, got %s", fmt.Sprintf("%s.down", want), string(downData))
 			}
-		})
-	}
-}
-
-func TestProvider_Next(t *testing.T) {
-	type fields struct {
-		position   int
-		names      []string
-		migrations map[string]*Migration
-	}
-	tests := []struct {
-		name    string
-		fields  fields
-		want    migrate.Migration
-		wantErr bool
-	}{
-		// TODO: Add test cases.
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			p := &Provider{
-				position:   tt.fields.position,
-				names:      tt.fields.names,
-				migrations: tt.fields.migrations,
-			}
-			got, err := p.Next()
-			if (err != nil) != tt.wantErr {
-				t.Errorf("Next() error = %v, wantErr %v", err, tt.wantErr)
-				return
-			}
-			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("Next() got = %v, want %v", got, tt.want)
-			}
-		})
+		}
+		m.Close()
 	}
 }
