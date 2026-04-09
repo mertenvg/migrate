@@ -39,6 +39,23 @@ func TestSQLReader_Next(t *testing.T) {
 	validateNext(t, r, "", false)
 }
 
+func TestSQLReader_Next_DollarQuoted(t *testing.T) {
+	src := bytes.NewBufferString(`DO $$ BEGIN RAISE NOTICE 'hi;there'; END $$; SELECT 1;`)
+	r := NewSQLReader(src)
+
+	validateNext(t, r, `DO $$ BEGIN RAISE NOTICE 'hi;there'; END $$`, false)
+	validateNext(t, r, "SELECT 1", false)
+	validateNext(t, r, "", false)
+}
+
+func TestSQLReader_Next_DollarQuotedTagged(t *testing.T) {
+	src := bytes.NewBufferString(`CREATE FUNCTION f() RETURNS void AS $body$ BEGIN PERFORM 'x;$$y'; END $body$ LANGUAGE plpgsql; SELECT 2;`)
+	r := NewSQLReader(src)
+
+	validateNext(t, r, `CREATE FUNCTION f() RETURNS void AS $body$ BEGIN PERFORM 'x;$$y'; END $body$ LANGUAGE plpgsql`, false)
+	validateNext(t, r, "SELECT 2", false)
+}
+
 func TestSQLReader_Next_WithFail(t *testing.T) {
 	src := bytes.NewBufferString(`Query 1; Query 2`)
 	r := NewSQLReader(src)
