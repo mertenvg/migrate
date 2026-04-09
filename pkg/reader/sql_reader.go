@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"regexp"
 	"strings"
 )
 
@@ -22,6 +23,10 @@ func NewSQLReader(source io.Reader) *SQLReader {
 	}
 }
 
+// copyFromStdinRe matches a `COPY ... FROM stdin` statement so the inline data
+// block following it can be skipped.
+var copyFromStdinRe = regexp.MustCompile(`(?is)^\s*COPY\b.*\bFROM\s+STDIN\b`)
+
 func (r *SQLReader) Next() (query string, err error) {
 	if FailNext != nil {
 		err := FailNext
@@ -30,31 +35,84 @@ func (r *SQLReader) Next() (query string, err error) {
 	}
 	buf := bytes.Buffer{}
 	var quote bool
-	var escape bool
-	// When non-nil we are inside a Postgres dollar-quoted block. The value is
+	var quoteChar rune
+	var eString bool  // current `'...'` literal is an E-string (allows `\` escapes)
+	var bsEscape bool // previous char was a backslash inside an E-string
+	// When inDollar we are inside a Postgres dollar-quoted block. dollarTag is
 	// the tag between the dollar signs (empty string for `$$`).
 	var inDollar bool
 	var dollarTag string
 	for {
-		// Detect dollar-quote delimiters outside of regular string quotes.
-		if !escape && !quote {
+		if !quote && !inDollar {
+			// Dollar-quote delimiters.
 			if tag, n, ok := r.peekDollarTag(); ok {
-				if !inDollar {
-					inDollar = true
-					dollarTag = tag
-				} else if tag == dollarTag {
-					inDollar = false
-					dollarTag = ""
-				}
-				// Consume and write the delimiter (`$tag$`) verbatim.
-				for i := 0; i < n; i++ {
+				inDollar = true
+				dollarTag = tag
+				for range n {
 					b, rerr := r.source.ReadByte()
 					if rerr != nil {
 						return "", fmt.Errorf("failed to read source: %w", rerr)
 					}
-					if werr := buf.WriteByte(b); werr != nil {
-						return "", fmt.Errorf("failed to write byte to buffer: %w", werr)
+					buf.WriteByte(b)
+				}
+				continue
+			}
+			// `--` line comment.
+			if b, _ := r.source.Peek(2); len(b) == 2 && b[0] == '-' && b[1] == '-' {
+				for {
+					b, rerr := r.source.ReadByte()
+					if rerr != nil {
+						if rerr == io.EOF {
+							break
+						}
+						return "", fmt.Errorf("failed to read source: %w", rerr)
 					}
+					if b == '\n' {
+						break
+					}
+				}
+				continue
+			}
+			// `/* ... */` block comment (nestable).
+			if b, _ := r.source.Peek(2); len(b) == 2 && b[0] == '/' && b[1] == '*' {
+				if _, rerr := r.source.Discard(2); rerr != nil {
+					return "", fmt.Errorf("failed to read source: %w", rerr)
+				}
+				depth := 1
+				for depth > 0 {
+					b, _ := r.source.Peek(2)
+					if len(b) == 2 && b[0] == '/' && b[1] == '*' {
+						r.source.Discard(2)
+						depth++
+						continue
+					}
+					if len(b) == 2 && b[0] == '*' && b[1] == '/' {
+						r.source.Discard(2)
+						depth--
+						continue
+					}
+					if len(b) < 2 {
+						return "", fmt.Errorf("unterminated block comment")
+					}
+					if _, rerr := r.source.ReadByte(); rerr != nil {
+						return "", fmt.Errorf("failed to read source: %w", rerr)
+					}
+				}
+				continue
+			}
+		}
+
+		if inDollar {
+			// Inside a dollar block: look for the matching closing tag first.
+			if tag, n, ok := r.peekDollarTag(); ok && tag == dollarTag {
+				inDollar = false
+				dollarTag = ""
+				for range n {
+					b, rerr := r.source.ReadByte()
+					if rerr != nil {
+						return "", fmt.Errorf("failed to read source: %w", rerr)
+					}
+					buf.WriteByte(b)
 				}
 				continue
 			}
@@ -63,39 +121,112 @@ func (r *SQLReader) Next() (query string, err error) {
 		v, _, err := r.source.ReadRune()
 		if err != nil {
 			if err == io.EOF {
-				break // End of file
+				break
 			}
 			return "", fmt.Errorf("failed to read source: %w", err)
 		}
+
 		if inDollar {
-			if _, werr := buf.WriteRune(v); werr != nil {
-				return "", fmt.Errorf("failed to write rune to buffer: %w", werr)
+			buf.WriteRune(v)
+			continue
+		}
+
+		if quote {
+			if bsEscape {
+				buf.WriteRune(v)
+				bsEscape = false
+				continue
 			}
+			if eString && v == '\\' {
+				buf.WriteRune(v)
+				bsEscape = true
+				continue
+			}
+			if v == quoteChar {
+				// Doubled quote (`''` / `""`) is an escape — stay inside the literal.
+				if next, _ := r.source.Peek(1); len(next) == 1 && rune(next[0]) == quoteChar {
+					buf.WriteRune(v)
+					r.source.ReadByte()
+					buf.WriteRune(quoteChar)
+					continue
+				}
+				buf.WriteRune(v)
+				quote = false
+				eString = false
+				quoteChar = 0
+				continue
+			}
+			buf.WriteRune(v)
 			continue
 		}
-		if !escape && v == '\\' {
-			escape = true
+
+		// Not in any quoted context.
+		if v == '\'' || v == '"' {
+			quote = true
+			quoteChar = v
+			if v == '\'' && bufEndsWithEPrefix(&buf) {
+				eString = true
+			}
+			buf.WriteRune(v)
 			continue
 		}
-		if !escape && (v == '\'' || v == '"') {
-			quote = !quote
-		}
-		if !quote && v == ';' {
+		if v == ';' {
 			break
 		}
-		if escape {
-			_, err = buf.WriteRune('\\')
-			if err != nil {
-				return "", fmt.Errorf("failed to write rune to buffer: %w", err)
-			}
-			escape = false
-		}
-		_, err = buf.WriteRune(v)
-		if err != nil {
-			return "", fmt.Errorf("failed to write rune to buffer: %w", err)
+		buf.WriteRune(v)
+	}
+
+	stmt := strings.TrimSpace(buf.String())
+
+	// `COPY ... FROM stdin;` is followed by an inline data block terminated by
+	// a line containing only `\.`. That data is not SQL and would otherwise be
+	// parsed as further statements — skip it.
+	if copyFromStdinRe.MatchString(stmt) {
+		if err := r.skipCopyData(); err != nil {
+			return "", err
 		}
 	}
-	return strings.TrimSpace(buf.String()), nil
+
+	return stmt, nil
+}
+
+// skipCopyData consumes a Postgres COPY data block up to and including the
+// terminating `\.` line.
+func (r *SQLReader) skipCopyData() error {
+	for {
+		line, err := r.source.ReadString('\n')
+		trimmed := strings.TrimRight(line, "\r\n")
+		if trimmed == `\.` {
+			return nil
+		}
+		if err == io.EOF {
+			return fmt.Errorf("unterminated COPY data block")
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read copy data: %w", err)
+		}
+	}
+}
+
+// bufEndsWithEPrefix reports whether the buffer ends with a standalone `E`/`e`
+// token, which marks the following `'...'` as a Postgres escape string.
+func bufEndsWithEPrefix(buf *bytes.Buffer) bool {
+	b := buf.Bytes()
+	if len(b) == 0 {
+		return false
+	}
+	last := b[len(b)-1]
+	if last != 'e' && last != 'E' {
+		return false
+	}
+	if len(b) == 1 {
+		return true
+	}
+	return !isIdentCont(b[len(b)-2])
+}
+
+func isIdentCont(b byte) bool {
+	return b == '_' || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }
 
 // peekDollarTag checks whether the next bytes form a Postgres dollar-quote
